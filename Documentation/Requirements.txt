@@ -1,0 +1,951 @@
+# Complete Setup & Execution Guide
+
+This section explains how to set up and run the complete stock streaming platform from a clean local environment.
+
+---
+
+## 1. Prerequisites
+
+Install the following:
+
+* Python 3.9+
+* Java 17
+* Docker Desktop
+* Apache Spark / PySpark
+* Git
+
+Verify:
+
+```bash
+python3 --version
+java -version
+docker --version
+spark-submit --version
+git --version
+```
+
+The project was developed and tested with:
+
+```text
+Python       3.9+
+Java         17
+PySpark      4.0.4
+Docker       29.x+
+Kafka        4.0.0
+```
+
+---
+
+# 2. Clone the Repository
+
+```bash
+git clone <YOUR_GITHUB_REPOSITORY_URL>
+cd stock-streaming-platform
+```
+
+---
+
+# 3. Create Python Virtual Environment
+
+Create a virtual environment:
+
+```bash
+python3 -m venv .venv
+```
+
+Activate it:
+
+### macOS / Linux
+
+```bash
+source .venv/bin/activate
+```
+
+### Windows
+
+```bash
+.venv\Scripts\activate
+```
+
+---
+
+# 4. Install Python Dependencies
+
+Install all Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+The main Python dependencies are:
+
+```text
+pyspark
+kafka-python
+yfinance
+streamlit
+pandas
+pyarrow
+numpy
+```
+
+Verify PySpark:
+
+```bash
+python -c "import pyspark; print(pyspark.__version__)"
+```
+
+Expected:
+
+```text
+4.0.4
+```
+
+---
+
+# 5. Configure Java
+
+PySpark requires Java.
+
+Verify:
+
+```bash
+java -version
+```
+
+Expected:
+
+```text
+Java 17
+```
+
+On macOS, Java 17 can be installed using Homebrew:
+
+```bash
+brew install openjdk@17
+```
+
+If required, configure `JAVA_HOME`:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+```
+
+Verify:
+
+```bash
+echo $JAVA_HOME
+```
+
+---
+
+# 6. Start Docker Desktop
+
+Start Docker Desktop before starting Kafka.
+
+Verify that Docker is running:
+
+```bash
+docker ps
+```
+
+If Docker is working, the command should return the running containers.
+
+---
+
+# 7. Start Kafka
+
+This project uses the official Apache Kafka Docker image.
+
+Pull the image:
+
+```bash
+docker pull apache/kafka:4.0.0
+```
+
+Create the Kafka container:
+
+```bash
+docker run -d \
+  --name stock-kafka \
+  -p 9092:9092 \
+  apache/kafka:4.0.0
+```
+
+Verify:
+
+```bash
+docker ps
+```
+
+You should see:
+
+```text
+stock-kafka
+```
+
+---
+
+# 8. Restart Kafka
+
+If the container already exists but is stopped:
+
+```bash
+docker start stock-kafka
+```
+
+Check:
+
+```bash
+docker ps
+```
+
+To stop Kafka:
+
+```bash
+docker stop stock-kafka
+```
+
+To completely remove the container:
+
+```bash
+docker rm -f stock-kafka
+```
+
+If the container is removed, recreate it using the `docker run` command above.
+
+---
+
+# 9. Verify Kafka
+
+Check Kafka container logs:
+
+```bash
+docker logs stock-kafka
+```
+
+Kafka should be running without fatal startup errors.
+
+---
+
+# 10. Create Kafka Topic
+
+The application uses the following Kafka topic:
+
+```text
+stock_ticks
+```
+
+Create it with three partitions:
+
+```bash
+docker exec stock-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --create \
+  --topic stock_ticks \
+  --bootstrap-server localhost:9092 \
+  --partitions 3 \
+  --replication-factor 1
+```
+
+Verify the topic:
+
+```bash
+docker exec stock-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --list \
+  --bootstrap-server localhost:9092
+```
+
+Expected:
+
+```text
+stock_ticks
+```
+
+---
+
+# 11. Inspect Kafka Topic
+
+To inspect topic configuration:
+
+```bash
+docker exec stock-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --describe \
+  --topic stock_ticks \
+  --bootstrap-server localhost:9092
+```
+
+The project uses:
+
+```text
+Partitions: 3
+Replication Factor: 1
+```
+
+---
+
+# 12. Test Kafka Producer/Consumer Connection
+
+Kafka is exposed to the local machine on:
+
+```text
+localhost:9092
+```
+
+The Python producer connects to:
+
+```text
+localhost:9092
+```
+
+The Spark Kafka connector also connects to:
+
+```text
+localhost:9092
+```
+
+The overall connection is:
+
+```text
+Python Producer
+      |
+      | localhost:9092
+      ↓
+Apache Kafka
+      |
+      | localhost:9092
+      ↓
+PySpark Structured Streaming
+```
+
+---
+
+# 13. Stock Event Schema
+
+The producer publishes JSON events.
+
+Example:
+
+```json
+{
+  "event_id": "unique-event-id",
+  "symbol": "INFY",
+  "exchange": "NSE",
+  "price": 1500.50,
+  "volume": 1200,
+  "event_time": "2026-09-23T10:30:00",
+  "source": "yfinance"
+}
+```
+
+### Fields
+
+| Field        | Type      | Description             |
+| ------------ | --------- | ----------------------- |
+| `event_id`   | STRING    | Unique event identifier |
+| `symbol`     | STRING    | Stock symbol            |
+| `exchange`   | STRING    | Exchange                |
+| `price`      | DOUBLE    | Current stock price     |
+| `volume`     | LONG      | Trading volume          |
+| `event_time` | TIMESTAMP | Event timestamp         |
+| `source`     | STRING    | Data source             |
+
+---
+
+# 14. Run the Streaming Pipeline
+
+The streaming pipeline consists of four main processes:
+
+```text
+Producer
+   ↓
+Kafka
+   ↓
+Bronze
+   ↓
+Silver
+   ↓
+Gold
+```
+
+Run each long-running process in a separate terminal.
+
+---
+
+# 15. Terminal 1 — Start Producer
+
+Activate the environment:
+
+```bash
+source .venv/bin/activate
+```
+
+Run:
+
+```bash
+python producer/kafka_producer.py
+```
+
+The producer fetches stock data and publishes events to:
+
+```text
+stock_ticks
+```
+
+Keep this terminal running.
+
+---
+
+# 16. Terminal 2 — Kafka → Bronze
+
+Open another terminal.
+
+```bash
+cd stock-streaming-platform
+source .venv/bin/activate
+```
+
+Run:
+
+```bash
+spark-submit streaming/kafka_to_bronze.py
+```
+
+The job:
+
+```text
+Kafka
+  ↓
+JSON parsing
+  ↓
+Structured Spark DataFrame
+  ↓
+Bronze Parquet
+```
+
+Output:
+
+```text
+data/bronze/stock_ticks
+```
+
+Checkpoint:
+
+```text
+data/checkpoints/bronze
+```
+
+Keep the process running.
+
+---
+
+# 17. Terminal 3 — Bronze → Silver
+
+Open another terminal:
+
+```bash
+cd stock-streaming-platform
+source .venv/bin/activate
+```
+
+Run:
+
+```bash
+spark-submit streaming/bronze_to_silver.py
+```
+
+The Silver layer performs:
+
+* Null validation
+* Price validation
+* Volume validation
+* Watermarking
+* Deduplication
+* Data cleansing
+
+Output:
+
+```text
+data/silver/stock_ticks
+```
+
+Keep the process running.
+
+---
+
+# 18. Terminal 4 — Silver → Gold
+
+Open another terminal:
+
+```bash
+cd stock-streaming-platform
+source .venv/bin/activate
+```
+
+Run:
+
+```bash
+spark-submit streaming/silver_to_gold.py
+```
+
+The Gold layer produces:
+
+```text
+data/gold/stock_metrics
+data/gold/stock_anomalies
+```
+
+Keep this process running.
+
+---
+
+# 19. Terminal 5 — Start Dashboard
+
+Open another terminal:
+
+```bash
+cd stock-streaming-platform
+source .venv/bin/activate
+```
+
+Run:
+
+```bash
+streamlit run dashboard/dashboard.py
+```
+
+Streamlit will provide a local URL, typically:
+
+```text
+http://localhost:8501
+```
+
+Open that URL in the browser.
+
+---
+
+# 20. Complete Runtime Architecture
+
+Once all five terminals are running:
+
+```text
+┌─────────────────────┐
+│  Stock Data Source  │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Python Kafka        │
+│ Producer            │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Apache Kafka        │
+│                     │
+│ stock_ticks         │
+│ 3 partitions        │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Bronze              │
+│ Raw Streaming Data  │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Silver              │
+│ Clean + Validated   │
+│ + Deduplicated      │
+└──────────┬──────────┘
+           │
+           ▼
+┌──────────────────────────────┐
+│ Gold                         │
+│                              │
+│ stock_metrics                │
+│ stock_anomalies              │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ Streamlit Dashboard          │
+└──────────────────────────────┘
+```
+
+---
+
+# 21. Verify Each Layer
+
+The project stores data as Parquet.
+
+### Bronze
+
+```text
+data/bronze/stock_ticks
+```
+
+### Silver
+
+```text
+data/silver/stock_ticks
+```
+
+### Gold
+
+```text
+data/gold/stock_metrics
+data/gold/stock_anomalies
+```
+
+You can inspect Gold using:
+
+```bash
+spark-submit gold_analysis.py
+```
+
+This reads the Gold datasets as Spark DataFrames.
+
+---
+
+# 22. Verify Kafka Messages
+
+You can consume messages directly from Kafka for debugging.
+
+Run:
+
+```bash
+docker exec -it stock-kafka \
+  /opt/kafka/bin/kafka-console-consumer.sh \
+  --topic stock_ticks \
+  --bootstrap-server localhost:9092 \
+  --from-beginning
+```
+
+You should see JSON stock events.
+
+Press:
+
+```text
+Ctrl + C
+```
+
+to stop the consumer.
+
+---
+
+# 23. Useful Docker Commands
+
+### Check running containers
+
+```bash
+docker ps
+```
+
+### Check all containers
+
+```bash
+docker ps -a
+```
+
+### Kafka logs
+
+```bash
+docker logs stock-kafka
+```
+
+### Follow Kafka logs
+
+```bash
+docker logs -f stock-kafka
+```
+
+### Stop Kafka
+
+```bash
+docker stop stock-kafka
+```
+
+### Start Kafka
+
+```bash
+docker start stock-kafka
+```
+
+### Remove Kafka
+
+```bash
+docker rm -f stock-kafka
+```
+
+---
+
+# 24. Useful Kafka Commands
+
+### List topics
+
+```bash
+docker exec stock-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --list \
+  --bootstrap-server localhost:9092
+```
+
+### Describe topic
+
+```bash
+docker exec stock-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --describe \
+  --topic stock_ticks \
+  --bootstrap-server localhost:9092
+```
+
+### Consume messages
+
+```bash
+docker exec -it stock-kafka \
+  /opt/kafka/bin/kafka-console-consumer.sh \
+  --topic stock_ticks \
+  --bootstrap-server localhost:9092
+```
+
+---
+
+# 25. Restarting the Complete Project
+
+For a normal restart, you do not need to recreate Kafka.
+
+### 1. Start Docker Desktop
+
+```bash
+docker ps
+```
+
+### 2. Start Kafka
+
+```bash
+docker start stock-kafka
+```
+
+### 3. Start Producer
+
+```bash
+python producer/kafka_producer.py
+```
+
+### 4. Start Bronze
+
+```bash
+spark-submit streaming/kafka_to_bronze.py
+```
+
+### 5. Start Silver
+
+```bash
+spark-submit streaming/bronze_to_silver.py
+```
+
+### 6. Start Gold
+
+```bash
+spark-submit streaming/silver_to_gold.py
+```
+
+### 7. Start Dashboard
+
+```bash
+streamlit run dashboard/dashboard.py
+```
+
+---
+
+# 26. Stopping the Project
+
+Stop the Python/Spark processes using:
+
+```text
+Ctrl + C
+```
+
+in each terminal.
+
+Then optionally stop Kafka:
+
+```bash
+docker stop stock-kafka
+```
+
+---
+
+# 27. Important Notes
+
+### Keep streaming jobs running
+
+Bronze, Silver, and Gold are Spark Structured Streaming applications.
+
+They are expected to remain running while new events arrive.
+
+### Start upstream components first
+
+Recommended order:
+
+```text
+Kafka
+  ↓
+Producer
+  ↓
+Bronze
+  ↓
+Silver
+  ↓
+Gold
+  ↓
+Dashboard
+```
+
+### Do not commit generated data
+
+Do not commit:
+
+```text
+data/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+```
+
+These should be included in `.gitignore`.
+
+---
+
+# 28. Troubleshooting
+
+## Kafka connection refused
+
+Check:
+
+```bash
+docker ps
+```
+
+If Kafka is stopped:
+
+```bash
+docker start stock-kafka
+```
+
+Verify:
+
+```bash
+docker logs stock-kafka
+```
+
+---
+
+## Topic does not exist
+
+List topics:
+
+```bash
+docker exec stock-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --list \
+  --bootstrap-server localhost:9092
+```
+
+Create `stock_ticks` if necessary using the topic creation command above.
+
+---
+
+## Spark cannot find Kafka data source
+
+The Spark Kafka connector must be supplied when launching Spark.
+
+Example:
+
+```bash
+spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.4 \
+  streaming/kafka_to_bronze.py
+```
+
+Use the same connector version compatible with the installed Spark version.
+
+---
+
+## Java runtime error
+
+Check:
+
+```bash
+java -version
+```
+
+The project requires Java 17.
+
+On macOS:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+```
+
+---
+
+## No data in Silver or Gold
+
+Check each layer sequentially:
+
+```text
+Kafka
+ ↓
+Bronze
+ ↓
+Silver
+ ↓
+Gold
+```
+
+First verify Kafka messages.
+
+Then check:
+
+```text
+data/bronze/stock_ticks
+```
+
+Then:
+
+```text
+data/silver/stock_ticks
+```
+
+Then:
+
+```text
+data/gold/stock_metrics
+data/gold/stock_anomalies
+```
+
+---
+
+# 29. Development Workflow
+
+When making changes:
+
+```text
+1. Change producer / transformation logic
+2. Test locally
+3. Verify output schema
+4. Verify downstream layer
+5. Verify dashboard
+6. Update README
+7. Commit changes
+8. Push to GitHub
+```
+
+This keeps the project reproducible and makes future debugging easier.
